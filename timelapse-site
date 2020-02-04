@@ -1,0 +1,16 @@
+
+  server {
+    server_name _;
+    listen [::]:80 default_server ipv6only=off;
+    listen [::]:443 ssl default_server ipv6only=off;
+
+    root /var/lib/timelapse/;
+
+    location / {
+        # First attempt to serve request as file, then
+        # as directory, then fall back to displaying a 404.
+        try_files $uri $uri/ =404;
+
+        autoindex on;
+    }
+  }
