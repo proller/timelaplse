@@ -47,22 +47,31 @@ sub opt(;$$) {
     $opt->{dir}    //= "$opt->{root}photo/";
     $opt->{video}  //= "$opt->{root}video/";
     $opt->{backup} //= "$opt->{root}backup";
+    $opt->{hourly} //= "$opt->{root}hourly/";
     $opt->{name}   //= '0';                     # '2';
     $opt->{prefix} //= "tl-$opt->{name}-";
     $opt->{ext}    //= '.jpg';
     $opt->{user}   //= $ENV{USER};
     ($opt->{self} //= `realpath $0`) =~ s/\s+$//;
 
-    $opt->{device}     //= "/dev/video$opt->{name}";
+    $opt->{device} //= "/dev/video$opt->{name}";
     #$opt->{resolution} //= '1280x720';
-    $opt->{loop}       //= 10;                         #seconds
-    $opt->{frames}     //= 10;
-    $opt->{jpeg}       //= 95;
+    $opt->{loop}   //= 10;                      #seconds
+    $opt->{frames} //= 10;
+    $opt->{jpeg}   //= 95;
+
+    $opt->{framerate} //= 25;
+    $opt->{encoder}   //= 'libx264';
 
     return $opt;
 }
 
-sub process {
+sub make_video($$$) {
+    my ($opt, $name, $result) = @_;
+    return sy qq{ffmpeg -y -framerate $opt->{framerate} -pattern_type glob -i '$name' -c:v $opt->{encoder} $result};
+}
+
+sub process($) {
     my ($opt) = @_;
     install($opt) unless -d $opt->{dir};
     my $cur_date = POSIX::strftime("%Y-%m-%d", localtime time);
@@ -73,12 +82,15 @@ sub process {
         next unless $f =~ /^$opt->{prefix}/;
         next unless $f =~ /\Q$opt->{ext}\E$/;
         $f =~ /(\d+-\d+-\d+)T/;
-        push @{$dates{$1}}, "$opt->{dir}/$f";
-        print "$opt->{dir}/$f $1\n";
+        my $full = "$opt->{dir}/$f";
+        unlink $full unless -s $full;    # out of space result
+        push @{$dates{$1}}, $full;
+        print "$full $1\n";
     }
     for my $date (sort keys %dates) {
         my $result = "$opt->{video}vtl-$opt->{name}-${date}.mp4";
-        next if sy qq{ffmpeg -y -framerate 25 -pattern_type glob -i '$opt->{dir}/$opt->{prefix}${date}T*$opt->{ext}' -c:v libx264 $result};
+        #next if
+        make_video($opt, "$opt->{dir}/$opt->{prefix}${date}T*$opt->{ext}", $result);
 
         if ($date ~~ $cur_date) {
             next;
@@ -86,9 +98,20 @@ sub process {
         sy "ln -fs $result $opt->{video}latest$opt->{name}.mp4";
 
         mkdirp "$opt->{backup}/$date";
+        mkdirp $opt->{hourly};
         for my $file (@{$dates{$date}}) {
+            File::Copy::copy $file, $opt->{hourly} if $file =~ /00-00$opt->{ext}$/;
             File::Copy::move $file, "$opt->{backup}/$date/";
         }
+    }
+}
+
+sub hourly($) {
+    my ($opt) = @_;
+    local $opt->{framerate} = 10;
+    for my $hour (map { sprintf "%02d", $_ } 0 .. 23) {
+        my $result = "$opt->{video}vth-$opt->{name}-${hour}.mp4";
+        make_video($opt, "$opt->{hourly}/$opt->{prefix}*T${hour}-*$opt->{ext}", $result);
     }
 }
 
@@ -165,6 +188,9 @@ qq{sudo rm /etc/cron.d/timelapse$opt->{name} /etc/nginx/sites-enabled/timelapse-
     }
     if ('process' ~~ $argv) {
         process($opt);
+    }
+    if ('hourly' ~~ $argv) {
+        hourly($opt);
     }
 }
 
