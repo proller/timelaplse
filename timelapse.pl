@@ -55,7 +55,7 @@ sub opt(;$$) {
     ($opt->{self} //= `realpath $0`) =~ s/\s+$//;
 
     $opt->{device} //= "/dev/video$opt->{name}";
-    #$opt->{resolution} //= '1280x720';
+    #$opt->{resolution} //= '1920x1080';
     $opt->{loop}   //= 10;                      #seconds
     $opt->{frames} //= 10;
     $opt->{jpeg}   //= 95;
@@ -118,7 +118,7 @@ sub hourly($) {
 sub install ($) {
     my ($opt) = @_;
 
-    my $params = join ' ', map {"--$_=$opt->{$_}"} grep { defined $opt->{$_} } qw(name);
+    my $params = join ' ', map {"--$_=$opt->{$_}"} grep { defined $opt->{$_} } qw(name resolution);
 
     sy qq{sudo mkdir -p $opt->{root}};
     sy qq{sudo chown $opt->{user} $opt->{root}};
@@ -167,6 +167,24 @@ sub run(;$$) {
         sy
 qq{sudo rm /etc/cron.d/timelapse$opt->{name} /etc/nginx/sites-enabled/timelapse-site /lib/systemd/system/timelapse$opt->{name}.service   /etc/cron.d/timelapse /lib/systemd/system/timelapse};
     }
+
+    if ('resolution' ~~ $argv) {
+        my ($max_sum, $max_r);
+        for(qx{ffmpeg -f video4linux2 -list_formats all -i $opt->{device} 2>&1}) {
+            next unless /\[video4linux2,v4l2/;
+            /:\s*([^:]*)$/;
+            for my $r (split /\s+/, $1) {
+                $r =~ /^(\d+)x(\d+)$/;
+                my $sum = $1 + $2;
+                next if $max_sum >= $sum;
+                $max_sum = $sum;
+                $max_r =  $r;
+            }
+        }
+        say "Max resolution: ",
+        $opt->{resolution} = $max_r if $max_r;
+    }
+
     if ('install' ~~ $argv) {
         install($opt);
     }
