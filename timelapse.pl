@@ -10,6 +10,21 @@ info:
 ffmpeg -f video4linux2 -list_formats all -i /dev/video0
 v4l2-ctl --list-formats-ext
 
+v4l2-ctl -d /dev/video0 --list-ctrls
+v4l2-ctl --get-ctrl=focus_auto
+v4l2-ctl --get-ctrl=focus_absolute
+v4l2-ctl --set-ctrl=focus_auto=0
+v4l2-ctl --set-ctrl=focus_absolute=0
+
+fswebcam --list-controls
+
+fswebcam --set "Restore Factory Settings"
+fswebcam --set brightness=100%
+
+night mode:
+fswebcam --set "brightness=50%" --set "Exposure (Absolute)=100%" --set "Backlight Compensation=100%" --set "Exposure, Auto=Manual Mode"
+fswebcam --set "Sharpness=100%" --set "Exposure (Absolute)=60%" --set "Backlight Compensation=50%" --set "Exposure, Auto=Aperture Priority Mode"
+--set "Focus (absolute)=0%" --set "Focus, Auto=False"
 
 
 =cut
@@ -40,6 +55,8 @@ sub file_rewrite(;$@) {
     print $fh @_;
 }
 
+my $fscamd_params = [qw(device resolution frames skip loop jpeg delay)];
+
 sub opt(;$$) {
     my ($opt, $argv) = @_;
     $opt ||= {map { s/^-+//; (undef, undef) = split /=/, $_, 2 } grep {/^-/} @$argv};
@@ -58,10 +75,13 @@ sub opt(;$$) {
     #$opt->{resolution} //= '1920x1080';
     $opt->{loop}   //= 10;                      #seconds
     $opt->{frames} //= 10;
+    $opt->{skip} //= 5; # first five for auto-adjust
+    $opt->{delay} //= 1;
     $opt->{jpeg}   //= 95;
+    $opt->{set}    //= q{--set "Focus (absolute)=0%" --set "Focus, Auto=False" --set "Sharpness=100%" --set "Exposure (Absolute)=60%" --set "Backlight Compensation=50%" --set "Exposure, Auto=Aperture Priority Mode"};
 
     $opt->{framerate} //= 25;
-    $opt->{encoder}   //= 'libx264';
+    $opt->{encoder}   //= 'libx264'; # 'libvpx-vp9'
 
     return $opt;
 }
@@ -118,7 +138,7 @@ sub hourly($) {
 sub install ($) {
     my ($opt) = @_;
 
-    my $params = join ' ', map {"--$_=$opt->{$_}"} grep { defined $opt->{$_} } qw(name resolution);
+    my $params = join ' ', map {"--$_=$opt->{$_}"} grep { defined $opt->{$_} } qw(name), @$fscamd_params;
 
     sy qq{sudo mkdir -p $opt->{root}};
     sy qq{sudo chown $opt->{user} $opt->{root}};
@@ -168,7 +188,7 @@ sub run(;$$) {
 qq{sudo rm /etc/cron.d/timelapse$opt->{name} /etc/nginx/sites-enabled/timelapse-site /lib/systemd/system/timelapse$opt->{name}.service   /etc/cron.d/timelapse /lib/systemd/system/timelapse};
     }
 
-    if ('resolution' ~~ $argv) {
+    if (!$opt->{resolution} or 'resolution' ~~ $argv) {
         my ($max_sum, $max_r);
         for(qx{ffmpeg -f video4linux2 -list_formats all -i $opt->{device} 2>&1}) {
             next unless /\[video4linux2,v4l2/;
@@ -190,8 +210,8 @@ qq{sudo rm /etc/cron.d/timelapse$opt->{name} /etc/nginx/sites-enabled/timelapse-
     }
     if ('service' ~~ $argv) {
         warn("No video device $opt->{device}"), return unless -e $opt->{device};
-        my $params = join ' ', map {"--$_ $opt->{$_}"} grep { defined $opt->{$_} } qw(device resolution frames loop jpeg);
-        sy "fswebcam --quiet  --no-banner $params '$opt->{dir}$opt->{prefix}%Y-%m-%''dT%H-%M-%''S$opt->{ext}'";
+        my $params = join ' ', map {"--$_ $opt->{$_}"} grep { length $opt->{$_} } @$fscamd_params;
+        sy "fswebcam --quiet --no-banner $params $opt->{set} '$opt->{dir}$opt->{prefix}%Y-%m-%''dT%H-%M-%''S$opt->{ext}'";
     }
     if ('start' ~~ $argv) {
         sy "sudo service timelapse$opt->{name} start";
