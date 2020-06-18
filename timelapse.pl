@@ -74,21 +74,36 @@ sub opt(;$$) {
     $opt->{device} //= "/dev/video$opt->{name}";
     #$opt->{resolution} //= '1920x1080';
     $opt->{loop}   //= 10;                      #seconds
-    $opt->{frames} //= 10;
-    $opt->{skip} //= 5; # first five for auto-adjust
-    $opt->{delay} //= 1;
-    $opt->{jpeg}   //= 95;
-    $opt->{set}    //= q{--set "Focus (absolute)=0%" --set "Focus, Auto=False" --set "Sharpness=100%" --set "Exposure (Absolute)=60%" --set "Backlight Compensation=50%" --set "Exposure, Auto=Aperture Priority Mode"};
+                                                #$opt->{frames} //= 10;
+                                                #$opt->{skip} //= 5; # first five for auto-adjust
+    #$opt->{frames} //= 2;
+    #$opt->{skip} //= 1; # first five for auto-adjust
+    #$opt->{delay} //= 8;
+    $opt->{jpeg} //= 95;
+    $opt->{set} //= join ' ', q{--set "Focus (absolute)=0%"}, q{--set "Focus, Auto=False"},
+      q{--set "Sharpness=100%"},
+      #q{--set "Sharpness=50%"},
+      q{--set "Backlight Compensation=50%"},
+      q{--set "White Balance Temperature, Auto=False"},
+      #q{--set "White Balance Temperature, Auto=True"},
+      #q{--set "Exposure, Auto=Manual Mode" --set "Exposure (Absolute)=70%"},
+      #q{--set "Exposure, Auto=Aperture Priority Mode"}, q{--set "Exposure (Absolute)=60%"}, # day
+      ;
+
+    #$opt->{night_exposure_absolute} = 5731; #21:30
+    $opt->{night_exposure_absolute} = 6500;    #21:30
 
     $opt->{framerate} //= 25;
-    $opt->{encoder}   //= 'libx264'; # 'libvpx-vp9'
+    $opt->{encoder}   //= 'libx264';           # 'libvpx-vp9'
+    $opt->{preset}    //= 'faster';            # 'veryfast'; # ~2.712g  'fast' killed on 4g; # https://trac.ffmpeg.org/wiki/Encode/H.264
 
     return $opt;
 }
 
 sub make_video($$$) {
     my ($opt, $name, $result) = @_;
-    return sy qq{ffmpeg -y -framerate $opt->{framerate} -pattern_type glob -i '$name' -c:v $opt->{encoder} $result};
+    return sy
+qq{ffmpeg -y -framerate $opt->{framerate} -pattern_type glob -i '$name' -c:v $opt->{encoder} -preset $opt->{preset} -movflags +faststart $result};
 }
 
 sub process($) {
@@ -138,7 +153,7 @@ sub hourly($) {
 sub install ($) {
     my ($opt) = @_;
 
-    my $params = join ' ', map {"--$_=$opt->{$_}"} grep { defined $opt->{$_} } qw(name), @$fscamd_params;
+    my $params = join ' ', map {"--$_=$opt->{$_}"} grep { defined $opt->{$_} } qw(name), qw(resolution);    #@$fscamd_params;
 
     sy qq{sudo mkdir -p $opt->{root}};
     sy qq{sudo chown $opt->{user} $opt->{root}};
@@ -151,7 +166,13 @@ sub install ($) {
     sy qq{sudo usermod -a -G video $opt->{user}};
     sy qq{sudo ln -s `realpath timelapse-site` /etc/nginx/sites-enabled};
     #sy qq{sudo sh -c "echo \@reboot $opt->{user} `realpath timelapse.pl` start > /etc/cron.d/timelapse$opt->{name}"};
-    sy qq{sudo sh -c "echo 10 0 \\* \\* \\* $opt->{user} `realpath timelapse.pl` process $params > /etc/cron.d/timelapse$opt->{name}"};
+    sy qq{sudo sh -c "echo 10 0  \\* \\* \\* $opt->{user} `realpath timelapse.pl` process $params > /etc/cron.d/timelapse$opt->{name}"};
+    if (length $opt->{night_exposure_absolute}) {
+        sy
+qq{sudo sh -c "echo 30 21 \\* \\* \\* $opt->{user} v4l2-ctl -d $opt->{device} --set-ctrl=exposure_auto=1 --set-ctrl=exposure_absolute=$opt->{night_exposure_absolute} >> /etc/cron.d/timelapse$opt->{name}"};
+        sy
+qq{sudo sh -c "echo 30 3  \\* \\* \\* $opt->{user} v4l2-ctl -d $opt->{device} --set-ctrl=exposure_auto=3 >> /etc/cron.d/timelapse$opt->{name}"};
+    }
 
     file_rewrite 'tmp.service',
       qq{
@@ -188,28 +209,29 @@ sub run(;$$) {
 qq{sudo rm /etc/cron.d/timelapse$opt->{name} /etc/nginx/sites-enabled/timelapse-site /lib/systemd/system/timelapse$opt->{name}.service   /etc/cron.d/timelapse /lib/systemd/system/timelapse};
     }
 
-    if (!$opt->{resolution} or 'resolution' ~~ $argv) {
-        my ($max_sum, $max_r);
-        for(qx{ffmpeg -f video4linux2 -list_formats all -i $opt->{device} 2>&1}) {
-            next unless /\[video4linux2,v4l2/;
-            /:\s*([^:]*)$/;
-            for my $r (split /\s+/, $1) {
-                $r =~ /^(\d+)x(\d+)$/;
-                my $sum = $1 + $2;
-                next if $max_sum >= $sum;
-                $max_sum = $sum;
-                $max_r =  $r;
-            }
-        }
-        say "Max resolution: ",
-        $opt->{resolution} = $max_r if $max_r;
-    }
-
     if ('install' ~~ $argv) {
         install($opt);
     }
     if ('service' ~~ $argv) {
         warn("No video device $opt->{device}"), return unless -e $opt->{device};
+
+        if (!$opt->{resolution} or 'resolution' ~~ $argv) {
+            my ($max_sum, $max_r);
+            for (qx{ffmpeg -f video4linux2 -list_formats all -i $opt->{device} 2>&1}) {
+                next unless /\[video4linux2,v4l2/;
+                /:\s*([^:]*)$/;
+                for my $r (split /\s+/, $1) {
+                    $r =~ /^(\d+)x(\d+)$/;
+                    my $sum = $1 + $2;
+                    next if $max_sum >= $sum;
+                    $max_sum = $sum;
+                    $max_r   = $r;
+                }
+            }
+            say "Max resolution: ",
+              $opt->{resolution} = $max_r if $max_r;
+        }
+
         my $params = join ' ', map {"--$_ $opt->{$_}"} grep { length $opt->{$_} } @$fscamd_params;
         sy "fswebcam --quiet --no-banner $params $opt->{set} '$opt->{dir}$opt->{prefix}%Y-%m-%''dT%H-%M-%''S$opt->{ext}'";
     }
