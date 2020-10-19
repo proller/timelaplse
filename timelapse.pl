@@ -32,6 +32,8 @@ fswebcam --set "Sharpness=100%" --set "Exposure (Absolute)=60%" --set "Backlight
 use 5.20.0;
 no if $] >= 5.017011, warnings => 'experimental::smartmatch';
 use File::Copy;
+use File::Path;
+use Time::Local;
 use POSIX;
 
 sub mkdirp(;$$) {
@@ -76,7 +78,7 @@ sub opt(;$$) {
     $opt->{loop}   //= 10;                      #seconds
                                                 #$opt->{frames} //= 10;
                                                 #$opt->{skip} //= 5; # first five for auto-adjust
-    #$opt->{frames} //= 2;
+    $opt->{frames} //= 2; # 5;
     #$opt->{skip} //= 1; # first five for auto-adjust
     #$opt->{delay} //= 8;
     $opt->{jpeg} //= 95;
@@ -166,7 +168,7 @@ sub install ($) {
     sy qq{sudo usermod -a -G video $opt->{user}};
     sy qq{sudo ln -s `realpath timelapse-site` /etc/nginx/sites-enabled};
     #sy qq{sudo sh -c "echo \@reboot $opt->{user} `realpath timelapse.pl` start > /etc/cron.d/timelapse$opt->{name}"};
-    sy qq{sudo sh -c "echo 10 0  \\* \\* \\* $opt->{user} `realpath timelapse.pl` process $params > /etc/cron.d/timelapse$opt->{name}"};
+    sy qq{sudo sh -c "echo 10 0  \\* \\* \\* $opt->{user} `realpath timelapse.pl` process clean $params > /etc/cron.d/timelapse$opt->{name}"};
     if (length $opt->{night_exposure_absolute}) {
         sy
 qq{sudo sh -c "echo 30 21 \\* \\* \\* $opt->{user} v4l2-ctl -d $opt->{device} --set-ctrl=exposure_auto=1 --set-ctrl=exposure_absolute=$opt->{night_exposure_absolute} >> /etc/cron.d/timelapse$opt->{name}"};
@@ -195,6 +197,19 @@ WantedBy=multi-user.target
 
     sy qq{sudo mv tmp.service /lib/systemd/system/timelapse$opt->{name}.service};
     sy 'sudo systemctl daemon-reload';
+}
+
+sub clean($) {
+    my ($opt) = @_;
+    my $dir = $opt->{backup};
+    for my $file (<$dir/*>) {
+       next unless -d $file;
+        my ($year, $mon, $mday) = $file =~ m{(\d+)-(\d+)-(\d+)$};
+        next unless $year and $mon and $mday;
+        my $time = Time::Local::timelocal( 0, 0, 0, $mday, $mon-1, $year );
+        next if !$time or $time > time-86400 * ($opt->{backup_days} // 3);
+        say "removing $file = ",  File::Path::remove_tree($file);
+    }
 }
 
 sub run(;$$) {
@@ -251,6 +266,9 @@ qq{sudo rm /etc/cron.d/timelapse$opt->{name} /etc/nginx/sites-enabled/timelapse-
     }
     if ('hourly' ~~ $argv) {
         hourly($opt);
+    }
+    if ('clean' ~~ $argv) {
+        clean($opt);
     }
 }
 
