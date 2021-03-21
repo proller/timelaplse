@@ -62,17 +62,20 @@ my $fscamd_params = [qw(device resolution frames skip loop jpeg delay)];
 sub opt(;$$) {
     my ($opt, $argv) = @_;
     $opt ||= {map { s/^-+//; (undef, undef) = split /=/, $_, 2 } grep {/^-/} @$argv};
+    $opt->{name}   //= '0';                     # '2';
+    ($opt->{self} //= `realpath $0`) =~ s/\s+$//;
+    ($opt->{self_dir} //= $opt->{self}) =~ s{[^/]+$}{};
+    our $config = {};
+    do $opt->{self_dir} . 'config.pl';
+    $opt->{$_} = $config->{name}{$opt->{name}}{opt}{$_} for keys %{$config->{name}{$opt->{name}}{opt}};
     $opt->{root}   //= '/var/lib/timelapse/';
     $opt->{dir}    //= "$opt->{root}photo/";
     $opt->{video}  //= "$opt->{root}video/";
     $opt->{backup} //= "$opt->{root}backup";
     $opt->{hourly} //= "$opt->{root}hourly/";
-    $opt->{name}   //= '0';                     # '2';
     $opt->{prefix} //= "tl-$opt->{name}-";
     $opt->{ext}    //= '.jpg';
     $opt->{user}   //= $ENV{USER};
-    ($opt->{self} //= `realpath $0`) =~ s/\s+$//;
-
     $opt->{device} //= "/dev/video$opt->{name}";
     #$opt->{resolution} //= '1920x1080';
     $opt->{loop}   //= 10;                      #seconds
@@ -106,6 +109,8 @@ sub make_video($$$) {
     my ($opt, $name, $result) = @_;
     return sy
 qq{ffmpeg -y -framerate $opt->{framerate} -pattern_type glob -i '$name' -c:v $opt->{encoder} -preset $opt->{preset} -movflags +faststart $result};
+
+# env DISPLAY=:0 ffplay -stats -fast -framedrop -fs -s 640x480 -i /dev/video1
 }
 
 sub process($) {
